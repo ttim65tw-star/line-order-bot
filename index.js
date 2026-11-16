@@ -47,7 +47,6 @@ async function getUserName(event) {
   }
 }
 
-// 呼叫 Gemini AI 辨識圖片（加上除錯與防呆）
 async function recognizeMenuWithGemini(base64Image) {
   const apiKey = process.env.GEMINI_API_KEY;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
@@ -101,6 +100,34 @@ async function handleEvent(event) {
   }
   const state = groupStates[groupId];
 
-  // 1. 處理圖片訊息（會回報辨識狀況）
   if (event.message.type === 'image') {
-    try
+    try {
+      await client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: '🔍 收到圖片，AI 正在努力辨識菜單中，請稍候...'
+      });
+
+      const imageBuffer = await getImageBuffer(event.message.id);
+      const base64Image = imageBuffer.toString('base64');
+      const parsed = await recognizeMenuWithGemini(base64Image);
+
+      if (!parsed.isMenu || !parsed.items || parsed.items.length === 0) {
+        return client.pushMessage(groupId, {
+          type: 'text',
+          text: '⚠️ AI 檢查後發現這張圖片似乎不是菜單，或找不到清晰的品項與價格，請嘗試上傳更清晰的菜單截圖，或輸入「開單」手動點餐！'
+        });
+      }
+
+      state.isOrdering = true;
+      state.menu = parsed.items;
+      state.orders = [];
+
+      const menuListText = parsed.items.map(i => `• ${i.name} $${i.price}`).join('\n');
+
+      return client.pushMessage(groupId, {
+        type: 'text',
+        text: `📋 菜單辨識成功，已自動開啟點餐！\n\n${menuListText}\n\n👉 點餐請輸入：「+1 品項名稱」\n👉 查看明細請打：「統計」\n👉 結束請打：「結單」`
+      });
+    } catch (err) {
+      console.error('AI Error:', err);
+      return
