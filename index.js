@@ -49,8 +49,8 @@ async function getUserName(event) {
   }
 }
 
-// 🚀 帶有逾時防護的 Gemini 呼叫
-async function recognizeMenuWithGemini(base64Image) {
+// 🔄 帶有「自動重試」與「25秒逾時」的 Gemini 請求函式
+async function callGeminiWithRetry(base64Image, maxRetries = 2) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('尚未設定 GEMINI_API_KEY！');
 
@@ -63,42 +63,52 @@ async function recognizeMenuWithGemini(base64Image) {
 3. 嚴格只回傳純 JSON 格式，不要任何 markdown 標記：
 {"isMenu": true, "items": [{"name": "品項名稱", "price": 價格數字}]}`;
 
-  console.log('⏳ 正在對 Gemini 發送請求...');
-  
-  // 設定 15 秒逾時保護
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  for (let attempt = 1; attempt <= maxRetries + 1; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
 
-  try {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{
-          parts: [
-            { text: prompt },
-            { inline_data: { mime_type: "image/jpeg", data: base64Image } }
-          ]
-        }]
-      }),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
+    try {
+      console.log(`⏳ 正在對 Gemini 發送請求 (嘗試次數 ${attempt}/${maxRetries + 1})...`);
+      
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{
+            parts: [
+              { text: prompt },
+              { inline_data: { mime_type: "image/jpeg", data: base64Image } }
+            ]
+          }]
+        }),
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
 
-    const data = await response.json();
-    console.log('📥 Gemini 回傳原始資料:', JSON.stringify(data));
+      const data = await response.json();
 
-    if (data.error) throw new Error(`Gemini API 錯誤: ${data.error.message}`);
-    if (!data.candidates || data.candidates.length === 0) throw new Error('Gemini 未回傳內容');
+      if (data.error) {
+        throw new Error(`Gemini API 錯誤: ${data.error.message}`);
+      }
+      if (!data.candidates || data.candidates.length === 0) {
+        throw new Error('Gemini 未回傳內容');
+      }
 
-    const text = data.candidates[0].content.parts[0].text;
-    const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    return JSON.parse(cleanText);
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      throw new Error('Gemini API 回應逾時（超過 15 秒）');
+      const text = data.candidates[0].content.parts[0].text;
+      const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+      return JSON.parse(cleanText);
+
+    } catch (err) {
+      clearTimeout(timeoutId);
+      console.warn(`⚠️ 第 ${attempt} 次嘗試失敗: ${err.message}`);
+
+      if (attempt > maxRetries) {
+        throw err;
+      }
+
+      console.log('🔄 準備在 2 秒後自動重試...');
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
-    throw err;
   }
 }
 
@@ -111,19 +121,20 @@ async function handleEvent(event) {
   }
   const state = groupStates[groupId];
 
+  // 🖼️ 處理圖片訊息
   if (event.message.type === 'image') {
     try {
       console.log('🖼️ 偵測到圖片訊息，開始抓取圖片...');
       await client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '🔍 收到圖片，正在解析中...'
+        text: '🔍 收到圖片，AI 正在努力解析中（遇塞車會自動重試）...'
       });
 
       const imageBuffer = await getImageBuffer(event.message.id);
-      console.log(`📦 圖片下載成功，大小: ${imageBuffer.length} bytes，送往 Gemini...`);
+      console.log(`📦 圖片下載成功，大小: ${imageBuffer.length} bytes`);
 
       const base64Image = imageBuffer.toString('base64');
-      const parsed = await recognizeMenuWithGemini(base64Image);
+      const parsed = await callGeminiWithRetry(base64Image, 2);
       console.log('🤖 AI 解析結果成功:', JSON.stringify(parsed));
 
       if (!parsed.isMenu || !parsed.items || parsed.items.length === 0) {
@@ -143,17 +154,26 @@ async function handleEvent(event) {
         text: `📋 菜單辨識成功！\n\n${menuListText}\n\n👉 點餐請輸入：「+1 品項」`
       });
     } catch (err) {
-      console.error('❌ 圖片處理發生例外錯誤:', err);
+      console.error('❌ 圖片處理最終失敗:', err);
       return client.pushMessage(groupId, {
         type: 'text',
-        text: `❌ 發生錯誤：${err.message}`
+        text: `❌ AI 伺服器目前過載或回應逾時，已自動重試數次仍失敗。請稍後再試，或輸入「開單」改為手動點餐！`
       });
     }
   }
 
   if (event.message.type !== 'text') return;
-  const text = event.message.text.trim();
+  const text = event.message.text.trim().toLowerCase();
 
+  // 👋 回覆哈囉 / hi
+  if (text === '哈囉' || text === 'hi' || text === 'hello') {
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: '哈囉！我是你的點餐小幫手 🤖\n你可以傳送「菜單照片」讓我自動辨識，或是輸入「開單」來手動開始點餐喔！'
+    });
+  }
+
+  // 📢 開單指令
   if (text === '開單') {
     state.isOrdering = true;
     state.menu = [];
@@ -161,8 +181,9 @@ async function handleEvent(event) {
     return client.replyMessage(event.replyToken, { type: 'text', text: '📢 已開啟自由點餐！請輸入：「+1 品項 價格」' });
   }
 
+  // ➕ 點餐指令
   if (text.startsWith('+1')) {
-    const orderContent = text.replace(/^\+1\s*/, '').trim();
+    const orderContent = event.message.text.replace(/^\+1\s*/, '').trim();
     if (!orderContent) return;
     const userName = await getUserName(event);
     let matchedPrice = 0;
