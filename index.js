@@ -18,6 +18,7 @@ app.post('/webhook', line.middleware(config), (req, res) => {
   });
 });
 
+// 穩定的圖片下載串流處理
 function getImageBuffer(messageId) {
   return new Promise((resolve, reject) => {
     client.getMessageContent(messageId)
@@ -47,19 +48,18 @@ async function getUserName(event) {
   }
 }
 
-// 🎯 針對複雜排版菜單優化的專屬解析 Prompt
+// 🛡️ 結合 Gemini 2.5 Flash 的強效圖文辨識
 async function recognizeMenuWithGemini(base64Image) {
   const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error('尚未設定 GEMINI_API_KEY 環境變數！');
+  }
+
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
-  const prompt = `你是一個頂級的台灣小吃與精美菜單解析專家。這是一張排版豐富、包含圖文及多種規格（如大小份、羹湯類）的菜單。
-請仔細掃描圖片中的每一個區域（包含頂部的羹湯類、左側湯品、右側米糕與小菜等），並將所有品項與其對應的價格完整萃取出來。
-
-【特別解析規則】：
-1. 如果同一個品項有「小份」與「大份」（例如：筒仔米糕 小份 35 / 大份 70），請分別拆開為獨立品項記錄，名稱格式為：「品項名稱(小)」與「品項名稱(大)」。
-2. 如果是單一價格的品項（例如：羊肉羹 75、苦瓜排骨湯 $45），請直接抓取其名稱與對應數字價格。
-3. 如果整張圖完全不是菜單，請回傳：{"isMenu": false, "items": []}
-4. 請嚴格以純 JSON 格式回傳（絕對不要包含 \`\`\`json 或任何 markdown 標記），格式如下：
+  const prompt = `你是一個專業的台灣餐廳菜單解析AI。請仔細分析這張菜單圖片，找出所有餐點、飲料、湯品及其對應的價格。
+無論排版如何（包含大小份、多欄位），請將它們全部整理出來。
+請嚴格以純 JSON 格式回傳（絕對不要包含任何 markdown 標記如 \`\`\`json），格式如下：
 {"isMenu": true, "items": [{"name": "品項名稱", "price": 價格數字}]}`;
 
   const response = await fetch(url, {
@@ -76,8 +76,14 @@ async function recognizeMenuWithGemini(base64Image) {
   });
 
   const data = await response.json();
+  
+  // 增加詳細的錯誤攔截，方便除錯
+  if (data.error) {
+    throw new Error(`Gemini API 錯誤: ${data.error.message || JSON.stringify(data.error)}`);
+  }
+
   if (!data.candidates || data.candidates.length === 0) {
-    throw new Error('AI 未回傳任何內容，可能圖片過大或格式不支援。');
+    throw new Error('AI 未回傳任何內容，請檢查圖片是否過大。');
   }
 
   const text = data.candidates[0].content.parts[0].text;
@@ -106,11 +112,12 @@ async function handleEvent(event) {
   }
   const state = groupStates[groupId];
 
+  // 處理圖片訊息
   if (event.message.type === 'image') {
     try {
       await client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '🔍 收到菜單圖片，AI 正在強力解析多欄位與大小份品項中，請稍候...'
+        text: '🔍 正在接收圖片並交由 Gemini AI 解析菜單，請稍候...'
       });
 
       const imageBuffer = await getImageBuffer(event.message.id);
@@ -120,7 +127,7 @@ async function handleEvent(event) {
       if (!parsed.isMenu || !parsed.items || parsed.items.length === 0) {
         return client.pushMessage(groupId, {
           type: 'text',
-          text: '⚠️ AI 嘗試解析後，找不到清晰的品項與價格。建議直接輸入「開單」手動點餐！'
+          text: '⚠️ AI 讀取了圖片，但找不到明確的品項與價格。建議直接輸入「開單」手動點餐！'
         });
       }
 
@@ -132,13 +139,13 @@ async function handleEvent(event) {
 
       return client.pushMessage(groupId, {
         type: 'text',
-        text: `📋 菜單解析成功！\n\n${menuListText}\n\n👉 點餐請輸入：「+1 品項名稱」\n👉 查看明細請打：「統計」\n👉 結束請打：「結單」`
+        text: `📋 菜單 AI 辨識成功！\n\n${menuListText}\n\n👉 點餐請輸入：「+1 品項名稱」\n👉 查看明細請打：「統計」\n👉 結束請打：「結單」`
       });
     } catch (err) {
       console.error('AI Error:', err);
       return client.pushMessage(groupId, {
         type: 'text',
-        text: `❌ 圖片辨識發生錯誤：${err.message}`
+        text: `❌ AI 解析失敗：${err.message}`
       });
     }
   }
