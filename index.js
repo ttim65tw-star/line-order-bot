@@ -13,8 +13,6 @@ const groupStates = {};
 
 app.post('/webhook', line.middleware(config), (req, res) => {
   res.sendStatus(200);
-  
-  // 🔍 每次只要 LINE 有任何動作傳進來，立刻印在 Render Logs 裡！
   console.log('📌 收到 LINE 請求事件:', JSON.stringify(req.body.events));
 
   Promise.all(req.body.events.map(handleEvent)).catch((err) => {
@@ -51,6 +49,7 @@ async function getUserName(event) {
   }
 }
 
+// 🚀 帶有逾時防護的 Gemini 呼叫
 async function recognizeMenuWithGemini(base64Image) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('尚未設定 GEMINI_API_KEY！');
@@ -64,26 +63,43 @@ async function recognizeMenuWithGemini(base64Image) {
 3. 嚴格只回傳純 JSON 格式，不要任何 markdown 標記：
 {"isMenu": true, "items": [{"name": "品項名稱", "price": 價格數字}]}`;
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{
-        parts: [
-          { text: prompt },
-          { inline_data: { mime_type: "image/jpeg", data: base64Image } }
-        ]
-      }]
-    })
-  });
+  console.log('⏳ 正在對 Gemini 發送請求...');
+  
+  // 設定 15 秒逾時保護
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
 
-  const data = await response.json();
-  if (data.error) throw new Error(`Gemini API 錯誤: ${data.error.message}`);
-  if (!data.candidates || data.candidates.length === 0) throw new Error('Gemini 未回傳內容');
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{
+          parts: [
+            { text: prompt },
+            { inline_data: { mime_type: "image/jpeg", data: base64Image } }
+          ]
+        }]
+      }),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
 
-  const text = data.candidates[0].content.parts[0].text;
-  const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-  return JSON.parse(cleanText);
+    const data = await response.json();
+    console.log('📥 Gemini 回傳原始資料:', JSON.stringify(data));
+
+    if (data.error) throw new Error(`Gemini API 錯誤: ${data.error.message}`);
+    if (!data.candidates || data.candidates.length === 0) throw new Error('Gemini 未回傳內容');
+
+    const text = data.candidates[0].content.parts[0].text;
+    const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+    return JSON.parse(cleanText);
+  } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error('Gemini API 回應逾時（超過 15 秒）');
+    }
+    throw err;
+  }
 }
 
 async function handleEvent(event) {
@@ -108,7 +124,7 @@ async function handleEvent(event) {
 
       const base64Image = imageBuffer.toString('base64');
       const parsed = await recognizeMenuWithGemini(base64Image);
-      console.log('🤖 AI 解析結果:', JSON.stringify(parsed));
+      console.log('🤖 AI 解析結果成功:', JSON.stringify(parsed));
 
       if (!parsed.isMenu || !parsed.items || parsed.items.length === 0) {
         return client.pushMessage(groupId, {
