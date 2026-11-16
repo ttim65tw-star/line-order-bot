@@ -34,16 +34,14 @@ function getImageBuffer(messageId) {
   });
 }
 
-// 🖼️ 優化 1：圖片自動縮放與壓縮（大幅降低上傳時間與 AI 伺服器負擔）
+// 🖼️ 圖片自動縮放與壓縮維持 1024px，確保畫質與速度平衡
 async function compressImage(buffer) {
   try {
     const image = await Jimp.read(buffer);
-    // 如果圖片寬度超過 1024px，等比例縮小至 1024px（文字依然非常清晰）
     if (image.bitmap.width > 1024) {
       image.resize(1024, Jimp.AUTO);
     }
-    // 轉為 JPEG 並設定品質為 80%
-    return await image.quality(80).getBufferAsync(Jimp.MIME_JPEG);
+    return await image.quality(85).getBufferAsync(Jimp.MIME_JPEG);
   } catch (err) {
     console.warn('⚠️ 圖片壓縮失敗，改用原圖傳送:', err.message);
     return buffer;
@@ -66,29 +64,33 @@ async function getUserName(event) {
   }
 }
 
-// 🚀 優化 2 & 3：極簡高速 Prompt + 多模型自動輪替備援
-async function callGeminiOptimized(base64Image) {
+// 🚀 升級版：高容錯率、專為台灣菜單設計的深度 Prompt 與彈性溫度
+async function callGeminiAdvanced(base64Image) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('尚未設定 GEMINI_API_KEY！');
 
-  // 優化 3：設定多個模型端點，若第一個塞車或過載，自動無縫切換下一個！
-  const models = [
-    'gemini-3.8-flash',
-    'gemini-flash-latest'
-  ];
+  const models = ['gemini-3.8-flash', 'gemini-flash-latest'];
 
-  // 優化 2：極簡化 Prompt，減少 AI 思考延遲
-  const prompt = `提取菜單餐點與價格。大小份請拆開寫如「品項(小)」。非菜單回傳{"isMenu":false,"items":[]}。只回傳純JSON：{"isMenu":true,"items":[{"name":"品項","price":數字}]}`;
+  // 💡 升級重點：更聰明、具備容錯與推導能力的 Prompt
+  const prompt = `你是一個專業且經驗豐富的台灣餐廳菜單解析專家。請仔細讀取這張圖片中的所有餐點名稱與對應價格。
+
+【解析規則】：
+1. **強健辨識**：即使圖片排版較為複雜、字體模糊或有手寫塗改，請發揮邏輯自行推導並對齊「品項」與「價格」。
+2. **規格拆解**：若同品項有大小份、不同口味或加料選項，請明確拆開寫成獨立品項（例如：「排骨飯(大)」與「排骨飯(小)」，或「牛肉麵-清燉」）。
+3. **價格過濾**：價格必須是純數字（例如 50、120），若完全找不到價格請填 0。
+4. **防呆機制**：若這張圖片絕對不是菜單，請回傳：{"isMenu": false, "items": []}
+5. **輸出格式**：嚴格隻回傳合法純 JSON 格式，絕對不要包含任何 markdown 語法或額外文字：
+{"isMenu": true, "items": [{"name": "品項完整名稱", "price": 價格數字}]}`;
 
   let lastError = null;
 
   for (const model of models) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 18000); // 單一模型最多等 18 秒
+    const timeoutId = setTimeout(() => controller.abort(), 22000); // 稍微拉長至 22 秒給 AI 思考
 
     try {
-      console.log(`⏳ 嘗試使用模型 [${model}] 解析菜單...`);
+      console.log(`⏳ 嘗試使用模型 [${model}] 進行深度菜單解析...`);
       
       const response = await fetch(url, {
         method: 'POST',
@@ -100,10 +102,9 @@ async function callGeminiOptimized(base64Image) {
               { inline_data: { mime_type: "image/jpeg", data: base64Image } }
             ]
           }],
-          // 強制要求 Gemini 輸出純 JSON 格式，避免多餘廢話與解析錯誤
           generationConfig: {
             responseMimeType: "application/json",
-            temperature: 0.1
+            temperature: 0.3, // 🌟 調高創意溫度至 0.3，賦予 AI 彈性思考與容錯能力，不再死板
           }
         }),
         signal: controller.signal
@@ -116,7 +117,7 @@ async function callGeminiOptimized(base64Image) {
 
       const text = data.candidates[0].content.parts[0].text;
       const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-      console.log(`✅ 模型 [${model}] 解析成功！`);
+      console.log(`✅ 模型 [${model}] 深度解析成功！`);
       return JSON.parse(cleanText);
 
     } catch (err) {
@@ -141,18 +142,17 @@ async function handleEvent(event) {
   // 🖼️ 處理圖片訊息
   if (event.message.type === 'image') {
     try {
-      console.log('🖼️ 偵測到圖片訊息，開始抓取與壓縮...');
+      console.log('🖼️ 偵測到圖片訊息，啟動高精度解析流程...');
       await client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '🔍 收到菜單！正在自動壓縮並呼叫 AI 高速解析中...'
+        text: '🔍 收到菜單！AI 正在深度掃描與解析品項，請稍候...'
       });
 
       const rawBuffer = await getImageBuffer(event.message.id);
       const compressedBuffer = await compressImage(rawBuffer);
-      console.log(`📦 圖片處理完成：原圖 ${rawBuffer.length} bytes ➔ 壓縮後 ${compressedBuffer.length} bytes`);
-
       const base64Image = compressedBuffer.toString('base64');
-      const parsed = await callGeminiOptimized(base64Image);
+      
+      const parsed = await callGeminiAdvanced(base64Image);
 
       if (!parsed.isMenu || !parsed.items || parsed.items.length === 0) {
         return client.pushMessage(groupId, {
@@ -168,17 +168,17 @@ async function handleEvent(event) {
       const menuListText = parsed.items.map(i => `• ${i.name} $${i.price}`).join('\n');
       return client.pushMessage(groupId, {
         type: 'text',
-        text: `📋 菜單辨識成功！\n\n${menuListText}\n\n👉 點餐請輸入：「+1 品項」\n👉 查看統計：「統計」｜結束：「結單」`
+        text: `📋 菜單深度辨識成功！\n\n${menuListText}\n\n👉 點餐請輸入：「+1 品項」\n👉 查看統計：「統計」｜結束：「結單」`
       });
     } catch (err) {
-      console.error('❌ AI 辨識最終失敗，自動降級為手動模式:', err.message);
+      console.error('❌ AI 深度辨識最終失敗:', err.message);
       state.isOrdering = true;
       state.menu = [];
       state.orders = [];
 
       return client.pushMessage(groupId, {
         type: 'text',
-        text: `⚠️ 目前 Google AI 伺服器尖峰過載，無法自動辨識。\n\n📢 已自動為您開啟「手動點餐」模式！\n請直接輸入：「+1 品項 價格」（例如：+1 雞腿飯 100）`
+        text: `⚠️ 目前 Google AI 伺服器尖峰過載，無法完成自動辨識。\n\n📢 已自動為您開啟「手動點餐」模式！\n請直接輸入：「+1 品項 價格」（例如：+1 雞腿飯 100）`
       });
     }
   }
@@ -187,15 +187,13 @@ async function handleEvent(event) {
   const rawText = event.message.text.trim();
   const lowerText = rawText.toLowerCase();
 
-  // 👋 回覆哈囉 / hi
   if (lowerText === '哈囉' || lowerText === 'hi' || lowerText === 'hello') {
     return client.replyMessage(event.replyToken, {
       type: 'text',
-      text: '哈囉！我是你的點餐小幫手 🤖\n\n📌 使用方式：\n1. 直接傳送「菜單照片」自動辨識開單\n2. 輸入「開單」手動自由點餐\n3. 輸入「+1 品項」點餐、「取消」刪單\n4. 輸入「統計」看目前明細、「結單」算總帳！'
+      text: '哈囉！我是你的點餐小幫手 🤖\n\n📌 使用方式：\n1. 直接傳送「菜單照片」自動深度辨識開單\n2. 輸入「開單」手動自由點餐\n3. 輸入「+1 品項」點餐、「取消」刪單\n4. 輸入「統計」看目前明細、「結單」算總帳！'
     });
   }
 
-  // 📢 開單指令
   if (rawText === '開單') {
     state.isOrdering = true;
     state.menu = [];
@@ -206,7 +204,6 @@ async function handleEvent(event) {
     });
   }
 
-  // ➕ 點餐指令
   if (rawText.startsWith('+1')) {
     if (!state.isOrdering) {
       return client.replyMessage(event.replyToken, {
@@ -239,7 +236,6 @@ async function handleEvent(event) {
     });
   }
 
-  // 🗑️ 取消點餐
   if (rawText === '取消') {
     if (!state.isOrdering || state.orders.length === 0) return;
     const userId = event.source.userId;
@@ -254,7 +250,6 @@ async function handleEvent(event) {
     });
   }
 
-  // 📊 統計 / 目前訂單
   if (rawText === '統計' || rawText === '目前訂單') {
     if (!state.isOrdering) {
       return client.replyMessage(event.replyToken, { type: 'text', text: '⚠️ 目前沒有進行中的訂單。' });
@@ -280,7 +275,6 @@ async function handleEvent(event) {
     });
   }
 
-  // 🏁 結單
   if (rawText === '結單') {
     if (!state.isOrdering) {
       return client.replyMessage(event.replyToken, { type: 'text', text: '⚠️ 目前沒有進行中的訂單可以結單。' });
