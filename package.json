@@ -1,17 +1,15 @@
 {
+{
   "name": "line-order-bot",
   "version": "1.0.0",
-  "description": "LINE Group Order and Group Buying Bot",
+  "description": "LINE AI 點餐與團購統計機器人",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@line/bot-sdk": "^7.5.2",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "@google/genai": "^0.1.2",
+    "@line/bot-sdk": "^9.0.0",
+    "express": "^4.18.2"
   }
 }
