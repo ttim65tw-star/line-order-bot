@@ -130,4 +130,98 @@ async function handleEvent(event) {
       });
     } catch (err) {
       console.error('AI Error:', err);
-      return
+      return client.pushMessage(groupId, {
+        type: 'text',
+        text: `❌ 圖片辨識發生錯誤：${err.message}`
+      });
+    }
+  }
+
+  if (event.message.type !== 'text') return;
+  const text = event.message.text.trim();
+
+  if (text === '開單') {
+    state.isOrdering = true;
+    state.menu = [];
+    state.orders = [];
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: '📢 已開啟自由點餐！請輸入：「+1 品項 價格」，輸入「統計」看明細，輸入「結單」結束。'
+    });
+  }
+
+  if (text === '哈囉' || text === 'hi') {
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: '你好！傳送菜單照片或輸入「開單」即可開始點餐！'
+    });
+  }
+
+  if (!state.isOrdering) return;
+
+  if (text.startsWith('+1')) {
+    const orderContent = text.replace(/^\+1\s*/, '').trim();
+    if (!orderContent) return;
+
+    const userName = await getUserName(event);
+    let matchedPrice = 0;
+
+    const priceMatch = orderContent.match(/\s+(\d+)$/);
+    if (priceMatch) {
+      matchedPrice = parseInt(priceMatch[1], 10);
+    } else if (state.menu.length > 0) {
+      const sortedMenu = [...state.menu].sort((a, b) => b.name.length - a.name.length);
+      const found = sortedMenu.find(m => orderContent.includes(m.name));
+      if (found) matchedPrice = found.price;
+    }
+
+    state.orders.push({ userId: event.source.userId, userName, item: orderContent, price: matchedPrice });
+    const priceHint = matchedPrice > 0 ? ` ($${matchedPrice})` : '';
+
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: `✅ 已登記：${userName} ➔ ${orderContent}${priceHint}`
+    });
+  }
+
+  if (text === '取消') {
+    const userId = event.source.userId;
+    let lastIndex = -1;
+    for (let i = state.orders.length - 1; i >= 0; i--) {
+      if (state.orders[i].userId === userId) { lastIndex = i; break; }
+    }
+    if (lastIndex !== -1) {
+      const removed = state.orders.splice(lastIndex, 1)[0];
+      return client.replyMessage(event.replyToken, { type: 'text', text: `🗑️ 已取消：【${removed.item}】` });
+    } else {
+      return client.replyMessage(event.replyToken, { type: 'text', text: '❓ 找不到你的點餐紀錄！' });
+    }
+  }
+
+  if (text === '統計' || text === '目前訂單' || text === '結單') {
+    if (state.orders.length === 0) {
+      if (text === '結單') state.isOrdering = false;
+      return client.replyMessage(event.replyToken, { type: 'text', text: text === '結單' ? '🛑 本輪無人點餐，已結單。' : '目前尚無點餐紀錄！' });
+    }
+
+    const personalList = state.orders.map((o, idx) => `${idx + 1}. ${o.userName}：${o.item} ($${o.price})`).join('\n');
+    const itemCounts = {};
+    let totalAmount = 0;
+    state.orders.forEach(o => {
+      itemCounts[o.item] = (itemCounts[o.item] || 0) + 1;
+      totalAmount += o.price;
+    });
+
+    const summaryList = Object.entries(itemCounts).map(([item, count]) => `• ${item} x ${count}`).join('\n');
+    const title = text === '結單' ? '🎉 【最終結單總表】' : '📊 【目前點餐統計】';
+    if (text === '結單') state.isOrdering = false;
+
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: `${title}\n\n【叫餐總表】\n${summaryList}\n\n【個人明細】\n${personalList}\n\n💰 總計：${state.orders.length} 份 / 共 $${totalAmount} 元`
+    });
+  }
+}
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`Server is running on port ${port}`));
