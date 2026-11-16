@@ -47,14 +47,14 @@ async function getUserName(event) {
   }
 }
 
-// 🚀 使用免費額度的 Google Gemini 2.5 Flash 辨識菜單
+// 🚀 使用最新的 gemini-3.8-flash 模型辨識菜單
 async function recognizeMenuWithGemini(base64Image) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) {
     throw new Error('尚未設定 GEMINI_API_KEY 環境變數！');
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=${apiKey}`;
 
   const prompt = `你是一個專業的台灣餐廳菜單解析專家。請仔細分析這張菜單圖片，找出所有餐點、飲料、湯品及其對應的價格數字。
 規則：
@@ -78,7 +78,6 @@ async function recognizeMenuWithGemini(base64Image) {
 
   const data = await response.json();
   
-  // 如果 Google API 回傳錯誤，直接捕捉並顯示原因
   if (data.error) {
     throw new Error(`Gemini API 錯誤: ${data.error.message || JSON.stringify(data.error)}`);
   }
