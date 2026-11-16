@@ -23,6 +23,19 @@ app.post('/webhook', line.middleware(config), (req, res) => {
 });
 
 async function handleEvent(event) {
+  // 處理機器人被加入群組的事件（加上 try-catch 防止報錯退群）
+  if (event.type === 'join') {
+    try {
+      await client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: '大家好！我是點餐神助手 🍽️\n只要傳送「哈囉」或上傳菜單，我就能幫忙！'
+      });
+    } catch (err) {
+      console.error('Join event error:', err);
+    }
+    return Promise.resolve(null);
+  }
+
   if (event.type !== 'message' || event.message.type !== 'text') {
     return Promise.resolve(null);
   }
@@ -30,18 +43,10 @@ async function handleEvent(event) {
   const text = event.message.text.trim();
   const groupId = event.source.groupId || event.source.userId;
 
-  // 初始化群組狀態
-  if (!groupStates[groupId]) {
-    groupStates[groupId] = { status: 'IDLE', menu: [], orders: {} };
-  }
-
-  const state = groupStates[groupId];
-
-  // 測試回應
   if (text === '哈囉' || text === 'hi') {
     return client.replyMessage(event.replyToken, {
       type: 'text',
-      text: '你好！我是點餐神助手，傳送菜單照片即可開始開單。'
+      text: '你好！我是點餐神助手，隨時準備為大家服務。'
     });
   }
 
