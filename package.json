@@ -1,13 +1,13 @@
 {
   "name": "line-order-bot",
   "version": "1.0.0",
-  "description": "LINE 點餐與團購統計機器人",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@line/bot-sdk": "^9.0.0",
-    "express": "^4.18.2"
+    "@line/bot-sdk": "^9.3.0",
+    "express": "^4.19.2",
+    "jimp": "^0.22.12"
   }
 }
