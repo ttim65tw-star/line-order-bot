@@ -47,19 +47,19 @@ async function getUserName(event) {
   }
 }
 
-// 🚀 優化後的超強容錯 AI 辨識函式
+// 🎯 針對複雜排版菜單優化的專屬解析 Prompt
 async function recognizeMenuWithGemini(base64Image) {
   const apiKey = process.env.GEMINI_API_KEY;
   const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
 
-  const prompt = `你是一個頂級的菜單與價目表解析專家。這張圖片可能是稍微模糊、排版凌亂、手寫或含有背景干擾的菜單截圖。
-請發揮最強的圖像識別與上下文推導能力，盡全力找出所有的餐點、飲料品項以及對應的價格數字。
+  const prompt = `你是一個頂級的台灣小吃與精美菜單解析專家。這是一張排版豐富、包含圖文及多種規格（如大小份、羹湯類）的菜單。
+請仔細掃描圖片中的每一個區域（包含頂部的羹湯類、左側湯品、右側米糕與小菜等），並將所有品項與其對應的價格完整萃取出來。
 
-【解析規則】：
-1. 盡可能將模糊不清的文字或稍微錯位的價格進行合理配對。
-2. 如果某些品項找不到價格，請將 price 設為 0。
-3. 如果整張圖完全跟餐飲、商品販售、價目表無關（例如風景照、自拍照、毫無文字的圖片），請回傳：{"isMenu": false, "items": []}
-4. 請嚴格以純 JSON 格式回傳（絕對不要包含 \`\`\`json 或任何markdown標記），格式如下：
+【特別解析規則】：
+1. 如果同一個品項有「小份」與「大份」（例如：筒仔米糕 小份 35 / 大份 70），請分別拆開為獨立品項記錄，名稱格式為：「品項名稱(小)」與「品項名稱(大)」。
+2. 如果是單一價格的品項（例如：羊肉羹 75、苦瓜排骨湯 $45），請直接抓取其名稱與對應數字價格。
+3. 如果整張圖完全不是菜單，請回傳：{"isMenu": false, "items": []}
+4. 請嚴格以純 JSON 格式回傳（絕對不要包含 \`\`\`json 或任何 markdown 標記），格式如下：
 {"isMenu": true, "items": [{"name": "品項名稱", "price": 價格數字}]}`;
 
   const response = await fetch(url, {
@@ -110,7 +110,7 @@ async function handleEvent(event) {
     try {
       await client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '🔍 收到圖片，AI 正在強力解析模糊/凌亂菜單中，請稍候...'
+        text: '🔍 收到菜單圖片，AI 正在強力解析多欄位與大小份品項中，請稍候...'
       });
 
       const imageBuffer = await getImageBuffer(event.message.id);
@@ -120,7 +120,7 @@ async function handleEvent(event) {
       if (!parsed.isMenu || !parsed.items || parsed.items.length === 0) {
         return client.pushMessage(groupId, {
           type: 'text',
-          text: '⚠️ AI 嘗試解析後，發現這張圖片無法辨識為有效菜單，或找不到任何品項。建議上傳較清晰的截圖，或輸入「開單」手動點餐！'
+          text: '⚠️ AI 嘗試解析後，找不到清晰的品項與價格。建議直接輸入「開單」手動點餐！'
         });
       }
 
@@ -132,7 +132,7 @@ async function handleEvent(event) {
 
       return client.pushMessage(groupId, {
         type: 'text',
-        text: `📋 菜單解析成功（已啟用高容錯模式）！\n\n${menuListText}\n\n👉 點餐請輸入：「+1 品項名稱」\n👉 查看明細請打：「統計」\n👉 結束請打：「結單」`
+        text: `📋 菜單解析成功！\n\n${menuListText}\n\n👉 點餐請輸入：「+1 品項名稱」\n👉 查看明細請打：「統計」\n👉 結束請打：「結單」`
       });
     } catch (err) {
       console.error('AI Error:', err);
