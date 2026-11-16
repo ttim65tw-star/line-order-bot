@@ -1,7 +1,7 @@
 {
   "name": "line-order-bot",
   "version": "1.0.0",
-  "description": "LINE AI 點餐與團購統計機器人",
+  "description": "LINE AI order bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
