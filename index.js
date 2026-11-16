@@ -18,7 +18,7 @@ app.post('/webhook', line.middleware(config), (req, res) => {
   });
 });
 
-// 穩定的圖片下載串流處理
+// 下載 LINE 圖片的二進位串流
 function getImageBuffer(messageId) {
   return new Promise((resolve, reject) => {
     client.getMessageContent(messageId)
@@ -48,45 +48,58 @@ async function getUserName(event) {
   }
 }
 
-// 🛡️ 結合 Gemini 2.5 Flash 的強效圖文辨識
-async function recognizeMenuWithGemini(base64Image) {
-  const apiKey = process.env.GEMINI_API_KEY;
+// 🚀 改用 OpenAI GPT-4o-mini 進行超強菜單視覺辨識
+async function recognizeMenuWithOpenAI(base64Image) {
+  const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
-    throw new Error('尚未設定 GEMINI_API_KEY 環境變數！');
+    throw new Error('尚未設定 OPENAI_API_KEY 環境變數！');
   }
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`;
+  const url = 'https://api.openai.com/v1/chat/completions';
 
-  const prompt = `你是一個專業的台灣餐廳菜單解析AI。請仔細分析這張菜單圖片，找出所有餐點、飲料、湯品及其對應的價格。
-無論排版如何（包含大小份、多欄位），請將它們全部整理出來。
-請嚴格以純 JSON 格式回傳（絕對不要包含任何 markdown 標記如 \`\`\`json），格式如下：
+  const prompt = `你是一個頂級的台灣小吃與精美菜單解析專家。請仔細掃描這張菜單圖片，找出所有餐點、飲料、湯品及其對應的價格數字。
+特別規則：
+1. 如果同一個品項有「小份」與「大份」（例如：筒仔米糕 小份 35 / 大份 70），請分別拆開為獨立品項記錄，名稱格式為：「品項名稱(小)」與：「品項名稱(大)」。
+2. 如果整張圖完全不是菜單，請回傳：{"isMenu": false, "items": []}
+3. 請回傳合法的 JSON 格式（不要包含任何 markdown 程式碼標記），結構如下：
 {"isMenu": true, "items": [{"name": "品項名稱", "price": 價格數字}]}`;
 
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`
+    },
     body: JSON.stringify({
-      contents: [{
-        parts: [
-          { text: prompt },
-          { inline_data: { mime_type: "image/jpeg", data: base64Image } }
-        ]
-      }]
+      model: 'gpt-4o-mini',
+      messages: [
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: prompt },
+            {
+              type: 'image_url',
+              image_url: {
+                url: `data:image/jpeg;base64,${base64Image}`
+              }
+            }
+          ]
+        }
+      ],
+      max_tokens: 1000
     })
   });
 
   const data = await response.json();
-  
-  // 增加詳細的錯誤攔截，方便除錯
   if (data.error) {
-    throw new Error(`Gemini API 錯誤: ${data.error.message || JSON.stringify(data.error)}`);
+    throw new Error(`OpenAI API 錯誤: ${data.error.message}`);
   }
 
-  if (!data.candidates || data.candidates.length === 0) {
-    throw new Error('AI 未回傳任何內容，請檢查圖片是否過大。');
+  if (!data.choices || data.choices.length === 0) {
+    throw new Error('OpenAI 未回傳任何內容。');
   }
 
-  const text = data.candidates[0].content.parts[0].text;
+  const text = data.choices[0].message.content.trim();
   const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
   return JSON.parse(cleanText);
 }
@@ -117,17 +130,17 @@ async function handleEvent(event) {
     try {
       await client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '🔍 正在接收圖片並交由 Gemini AI 解析菜單，請稍候...'
+        text: '🔍 收到圖片，GPT 正在強力解析菜單中，請稍候...'
       });
 
       const imageBuffer = await getImageBuffer(event.message.id);
       const base64Image = imageBuffer.toString('base64');
-      const parsed = await recognizeMenuWithGemini(base64Image);
+      const parsed = await recognizeMenuWithOpenAI(base64Image);
 
       if (!parsed.isMenu || !parsed.items || parsed.items.length === 0) {
         return client.pushMessage(groupId, {
           type: 'text',
-          text: '⚠️ AI 讀取了圖片，但找不到明確的品項與價格。建議直接輸入「開單」手動點餐！'
+          text: '⚠️ AI 檢查後發現這張圖片似乎不是菜單，或找不到清晰的品項與價格！'
         });
       }
 
@@ -139,13 +152,13 @@ async function handleEvent(event) {
 
       return client.pushMessage(groupId, {
         type: 'text',
-        text: `📋 菜單 AI 辨識成功！\n\n${menuListText}\n\n👉 點餐請輸入：「+1 品項名稱」\n👉 查看明細請打：「統計」\n👉 結束請打：「結單」`
+        text: `📋 菜單辨識成功！\n\n${menuListText}\n\n👉 點餐請輸入：「+1 品項名稱」\n👉 查看明細請打：「統計」\n👉 結束請打：「結單」`
       });
     } catch (err) {
       console.error('AI Error:', err);
       return client.pushMessage(groupId, {
         type: 'text',
-        text: `❌ AI 解析失敗：${err.message}`
+        text: `❌ 圖片辨識發生錯誤：${err.message}`
       });
     }
   }
