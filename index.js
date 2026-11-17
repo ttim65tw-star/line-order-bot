@@ -308,6 +308,27 @@ async function handleEvent(event) {
   const userId = event.source.userId;
   const userName = await getUserName(event);
 
+  // 🤖 步驟 1：優先檢查是否為喚醒詞「點餐神助手」
+  if (event.message.type === 'text') {
+    const rawText = event.message.text.trim();
+    const lowerText = rawText.toLowerCase();
+
+    if (lowerText === '點餐神助手') {
+      return client.replyMessage(event.replyToken, {
+        type: 'text',
+        text: '🤖 **點餐神助手已上線！**\n\n📌 **使用方式：**\n1. 傳送「菜單照片」或輸入「開單」來發起點餐。\n2. 點餐/加減數量：\n   • `+1 滷肉飯` 或 `+2 珍奶`\n   • `-1 滷肉飯`（扣除或刪除該品項）\n   • `全部取消`（清除你先前點過的所有品項）\n3. **僅限發起人**可輸入「統計」、「結單」或設定自動結單時間（例如：「11:30結單」）。'
+      });
+    }
+  }
+
+  // 🛑 步驟 2：如果目前「尚未開單」，直接忽略所有訊息（包括圖片與文字），完全不干擾群組聊天
+  if (!state.isOrdering) {
+    return;
+  }
+
+  // ─── 以下為「已開單」狀態下的處理邏輯 ───
+
+  // 🖼️ 處理圖片訊息（發起開單辨識）
   if (event.message.type === 'image') {
     if (state.closeTimer) {
       clearTimeout(state.closeTimer);
@@ -357,18 +378,6 @@ async function handleEvent(event) {
 
   if (event.message.type !== 'text') return;
   const rawText = event.message.text.trim();
-  const lowerText = rawText.toLowerCase();
-
-  if (lowerText === '點餐神助手') {
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: '🤖 **點餐神助手已上線！**\n\n📌 **使用方式：**\n1. 傳送「菜單照片」或輸入「開單」來發起點餐。\n2. 點餐/加減數量：\n   • `+1 滷肉飯` 或 `+2 珍奶`\n   • `-1 滷肉飯`（扣除或刪除該品項）\n   • `全部取消`（清除你先前點過的所有品項）\n3. **僅限發起人**可輸入「統計」、「結單」或設定自動結單時間（例如：「11:30結單」）。'
-    });
-  }
-
-  if (!state.isOrdering && rawText !== '開單') {
-    return;
-  }
 
   if (rawText === '開單') {
     if (state.closeTimer) {
