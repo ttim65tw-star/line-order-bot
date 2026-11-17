@@ -113,7 +113,6 @@ async function callGeminiAdvanced(base64Image) {
   throw lastError || new Error('所有 AI 模型皆無法回應');
 }
 
-// 📊 產生標準叫餐與結算明細排版
 function generateReportText(state, titlePrefix) {
   const summary = {};
   let totalAmount = 0;
@@ -191,20 +190,17 @@ function executeAutoClose(groupId) {
   }).catch(console.error);
 }
 
-// 🔍 智慧解析點餐區段（支援 +數字、-數字 與備註分離）
 function parseOrderSegment(segment, menu) {
   let quantity = 1;
   let isMinus = false;
   let cleanSegment = segment;
 
-  // 1. 檢查是否有指定數量（例如 +2、-1、＋3 等）
   const qtyMatch = cleanSegment.match(/^([+-＋\－])(\d+)\s*(.*)$/);
   if (qtyMatch) {
     isMinus = (qtyMatch[1] === '-' || qtyMatch[1] === '－');
     quantity = parseInt(qtyMatch[2], 10);
     cleanSegment = qtyMatch[3].trim();
   } else {
-    // 檢查結尾或中間有沒有帶數量
     const middleQtyMatch = cleanSegment.match(/(.+?)\s+([+-＋\－])(\d+)(?:\s|$)(.*)/);
     if (middleQtyMatch) {
       cleanSegment = middleQtyMatch[1].trim();
@@ -323,6 +319,12 @@ async function handleEvent(event) {
 
   // 🖼️ 處理圖片訊息（發起開單）
   if (event.message.type === 'image') {
+    if (state.closeTimer) {
+      clearTimeout(state.closeTimer);
+      state.closeTimer = null;
+      state.closeTimeText = null;
+    }
+
     try {
       await client.replyMessage(event.replyToken, {
         type: 'text',
@@ -338,12 +340,6 @@ async function handleEvent(event) {
         return client.pushMessage(groupId, { type: 'text', text: '⚠️ AI 找不到清晰的品項與價格！' });
       }
 
-      if (state.closeTimer) {
-        clearTimeout(state.closeTimer);
-        state.closeTimer = null;
-        state.closeTimeText = null;
-      }
-
       state.isOrdering = true;
       state.menu = parsed.items;
       state.orders = [];
@@ -353,14 +349,9 @@ async function handleEvent(event) {
       const menuListText = parsed.items.map(i => `• ${i.name}：$${i.price}`).join('\n');
       return client.pushMessage(groupId, {
         type: 'text',
-        text: `👑 發起人：${userName}\n📋 菜單辨識成功！\n\n${menuListText}\n\n👉 點餐範例：「+1 品項」或「+2 品項」、「-1 品項」\n⏰ 僅限發起人可設定結單與統計！`
+        text: `👑 發起人：${userName}\n📋 菜單辨識成功！\n\n${menuListText}\n\n👉 點餐範例：「+1 品項」或「+2 品項」、「-1 品項」、「全部取消」\n⏰ 僅限發起人可設定結單與統計！`
       });
     } catch (err) {
-      if (state.closeTimer) {
-        clearTimeout(state.closeTimer);
-        state.closeTimer = null;
-        state.closeTimeText = null;
-      }
       state.isOrdering = true;
       state.menu = [];
       state.orders = [];
@@ -378,11 +369,17 @@ async function handleEvent(event) {
   const rawText = event.message.text.trim();
   const lowerText = rawText.toLowerCase();
 
-  if (lowerText === '哈囉' || lowerText === 'hi' || lowerText === 'hello') {
+  // 🤖 喚醒機器人指令：「點餐神助手」
+  if (lowerText === '點餐神助手') {
     return client.replyMessage(event.replyToken, {
       type: 'text',
-      text: '哈囉！我是你的點餐小幫手 🤖\n\n📌 使用方式：\n1. 傳送「菜單照片」或輸入「開單」來發起點餐\n2. 點餐/加減數量：「+1 滷肉飯」、「+2 珍奶」、「-1 滷肉飯」\n3. **僅限發起人**可輸入「統計」、「結單」或設定自動結單時間！'
+      text: '🤖 **點餐神助手已上線！**\n\n📌 **使用方式：**\n1. 傳送「菜單照片」或輸入「開單」來發起點餐。\n2. 點餐/加減數量：\n   • `+1 滷肉飯` 或 `+2 珍奶`\n   • `-1 滷肉飯`（扣除或刪除該品項）\n   • `全部取消`（清除你先前點過的所有品項）\n3. **僅限發起人**可輸入「統計」、「結單」或設定自動結單時間（例如：「11:30結單」）。'
     });
+  }
+
+  // 🛑 如果尚未開單且不是喚醒詞，一律忽略（不干擾日常聊天群組）
+  if (!state.isOrdering && rawText !== '開單') {
+    return;
   }
 
   // 📢 手動開單
@@ -400,16 +397,13 @@ async function handleEvent(event) {
 
     return client.replyMessage(event.replyToken, {
       type: 'text',
-      text: `📢 **已由 ${userName} 開啟自由點餐！**\n請輸入：「+1 品項 價格 備註」（支援 +2、-1 數量加減）\n⏰ 僅限發起人可進行結單與統計！`
+      text: `📢 **已由 ${userName} 開啟自由點餐！**\n請輸入：「+1 品項 價格 備註」（支援 +2、-1 數量加減與「全部取消」）\n⏰ 僅限發起人可進行結單與統計！`
     });
   }
 
   // ⏰ 設定自動結單（僅限發起人）
   const timeCmd = parseCloseTimeCommand(rawText);
   if (timeCmd) {
-    if (!state.isOrdering) {
-      return client.replyMessage(event.replyToken, { type: 'text', text: '⚠️ 目前尚未開單喔！' });
-    }
     if (state.creatorId && state.creatorId !== userId) {
       return client.replyMessage(event.replyToken, { type: 'text', text: `⚠️ 只有本次開單發起人（${state.creatorName}）才能設定自動結單喔！` });
     }
@@ -427,12 +421,24 @@ async function handleEvent(event) {
     });
   }
 
-  // ➕ 支援 +數字、-數字 與多筆點餐
-  if (/^[+\-＋\－]?\d*\s*[\+＋\-\－]/.test(rawText) || rawText.startsWith('+') || rawText.startsWith('＋') || rawText.startsWith('-') || rawText.startsWith('－') || rawText.includes('+') || rawText.includes('＋')) {
-    if (!state.isOrdering) {
-      return client.replyMessage(event.replyToken, { type: 'text', text: '⚠️ 目前尚未開單喔！請先傳送菜單或輸入「開單」。' });
+  // 🗑️ 全部取消（清除此人先前所有品項）
+  if (rawText === '全部取消') {
+    const beforeCount = state.orders.length;
+    state.orders = state.orders.filter(o => o.userId !== userId);
+    const removedCount = beforeCount - state.orders.length;
+
+    if (removedCount === 0) {
+      return client.replyMessage(event.replyToken, { type: 'text', text: '⚠️ 你目前沒有任何點餐紀錄可以清除喔！' });
     }
 
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: `🗑️ 已為 ${userName} 清除所有先前的點餐紀錄，您可以重新點餐囉！`
+    });
+  }
+
+  // ➕ 支援 +數字、-數字 與多筆點餐
+  if (/^[+\-＋\－]?\d*\s*[\+＋\-\－]/.test(rawText) || rawText.startsWith('+') || rawText.startsWith('＋') || rawText.startsWith('-') || rawText.startsWith('－') || rawText.includes('+') || rawText.includes('＋')) {
     const subSegments = rawText
       .split(/(?=[+\-＋\－]\d+)/g)
       .map(s => s.trim())
@@ -446,7 +452,6 @@ async function handleEvent(event) {
       const parsed = parseOrderSegment(segment, state.menu);
 
       if (parsed.isMinus) {
-        // 🗑️ 減數量或刪除品項邏輯
         const existingIdx = state.orders.findIndex(
           o => o.userId === userId && o.item.toLowerCase() === parsed.item.toLowerCase()
         );
@@ -463,7 +468,6 @@ async function handleEvent(event) {
           actionResults.push(`⚠️ 找不到你的「${parsed.item}」紀錄可扣除`);
         }
       } else {
-        // ➕ 加數量或新增品項邏輯
         const existingItem = state.orders.find(
           o => o.userId === userId && o.item.toLowerCase() === parsed.item.toLowerCase() && o.note === parsed.note
         );
@@ -496,9 +500,6 @@ async function handleEvent(event) {
 
   // 📊 統計（僅限發起人）
   if (rawText === '統計' || rawText === '目前訂單') {
-    if (!state.isOrdering) {
-      return client.replyMessage(event.replyToken, { type: 'text', text: '⚠️ 目前沒有進行中的訂單。' });
-    }
     if (state.creatorId && state.creatorId !== userId) {
       return client.replyMessage(event.replyToken, { type: 'text', text: `⚠️ 只有本次開單發起人（${state.creatorName}）才能查看統計喔！` });
     }
@@ -513,9 +514,6 @@ async function handleEvent(event) {
 
   // 🏁 結單（僅限發起人）
   if (rawText === '結單') {
-    if (!state.isOrdering) {
-      return client.replyMessage(event.replyToken, { type: 'text', text: '⚠️ 目前沒有進行中的訂單可以結單。' });
-    }
     if (state.creatorId && state.creatorId !== userId) {
       return client.replyMessage(event.replyToken, { type: 'text', text: `⚠️ 只有本次開單發起人（${state.creatorName}）才能執行結單喔！` });
     }
