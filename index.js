@@ -337,9 +337,10 @@ async function handleEvent(event) {
     }
 
     try {
+      // 💬 立即告知使用者正在判讀請稍候
       await client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '🔍 收到菜單！AI 正在進行解析，請稍候...'
+        text: '🔍 AI 正在判讀菜單，請稍候...'
       });
 
       const rawBuffer = await getImageBuffer(event.message.id);
