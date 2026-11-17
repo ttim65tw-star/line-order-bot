@@ -145,7 +145,7 @@ async function handleEvent(event) {
       const menuListText = parsed.items.map(i => `• ${i.name}：$${i.price}`).join('\n');
       return client.pushMessage(groupId, {
         type: 'text',
-        text: `📋 **菜單辨識成功！**\n\n${menuListText}\n\n👉 點餐請輸入：「+1 品項 [備註/金額]」`
+        text: `📋 **菜單辨識成功！**\n\n${menuListText}\n\n👉 點餐請輸入：「+1 品項 價格 備註」（支援一次點多個品項）`
       });
     } catch (err) {
       state.isOrdering = true;
@@ -153,7 +153,7 @@ async function handleEvent(event) {
       state.orders = [];
       return client.pushMessage(groupId, {
         type: 'text',
-        text: `⚠️ AI 伺服器繁忙，已自動開啟「手動點餐」模式！\n請直接輸入：「+1 品項 價格」（例如：+1 雞腿飯 100 微辣）`
+        text: `⚠️ AI 伺服器繁忙，已自動開啟「手動點餐」模式！\n請直接輸入：「+1 品項 價格 備註」`
       });
     }
   }
@@ -165,7 +165,7 @@ async function handleEvent(event) {
   if (lowerText === '哈囉' || lowerText === 'hi' || lowerText === 'hello') {
     return client.replyMessage(event.replyToken, {
       type: 'text',
-      text: '哈囉！我是你的點餐小幫手 🤖\n\n📌 使用方式：\n1. 傳送「菜單照片」自動辨識\n2. 輸入「開單」手動點餐\n3. 輸入「+1 品項 價格 (備註)」點餐\n4. 輸入「統計」看明細、輸入「結單」算總帳！'
+      text: '哈囉！我是你的點餐小幫手 🤖\n\n📌 使用方式：\n1. 傳送「菜單照片」自動辨識\n2. 輸入「開單」手動點餐\n3. 輸入「+1 品項 價格 備註」（支援一次打多個品項）\n4. 輸入「統計」看明細、輸入「結單」算總帳！'
     });
   }
 
@@ -179,66 +179,74 @@ async function handleEvent(event) {
     });
   }
 
-  // ➕ 點餐與備註智慧拆解邏輯
-  if (rawText.startsWith('+1')) {
+  // ➕ 支援一人點多個品項的智慧拆解與備註解析
+  if (rawText.startsWith('+1') || rawText.includes('+1')) {
     if (!state.isOrdering) {
       return client.replyMessage(event.replyToken, { type: 'text', text: '⚠️ 目前尚未開單喔！請先傳送菜單或輸入「開單」。' });
     }
-    const orderContent = rawText.replace(/^\+1\s*/, '').trim();
-    if (!orderContent) return;
 
     const userName = await getUserName(event);
-    let matchedPrice = 0;
-    let detectedItem = orderContent;
-    let customNote = '';
+    
+    // 把整句話以 "+1" 或 "＋1" 切割，支援一個人一次輸入多個品項
+    const subSegments = rawText.split(/(?=\+1|＋1)/g).map(s => s.replace(/^\+1|＋1/, '').trim()).filter(Boolean);
+    
+    if (subSegments.length === 0) return;
 
-    // 1. 優先從文字中抓出金額數字 (例如結尾或獨立的數字 $50 / 50)
-    const priceRegex = /\s+(\d+)(?:\s|$)/g;
-    let match;
-    let lastPriceMatch = null;
-    while ((match = priceRegex.exec(orderContent)) !== null) {
-      lastPriceMatch = match;
-    }
+    let addedResults = [];
 
-    if (lastPriceMatch) {
-      matchedPrice = parseInt(lastPriceMatch[1], 10);
-      // 把金額從品項字串中抽離
-      detectedItem = orderContent.slice(0, lastPriceMatch.index).trim();
-      customNote = orderContent.slice(lastPriceMatch.index + lastPriceMatch[0].length).trim();
-    } else if (state.menu.length > 0) {
-      // 2. 如果使用者沒打價錢，嘗試從 AI 菜單中對應品項名稱與價格
-      const sortedMenu = [...state.menu].sort((a, b) => b.name.length - a.name.length);
-      const found = sortedMenu.find(m => orderContent.includes(m.name));
-      if (found) {
-        matchedPrice = found.price;
-        detectedItem = found.name;
-        // 剩下的字串當作備註
-        customNote = orderContent.replace(found.name, '').trim();
+    for (const segment of subSegments) {
+      let matchedPrice = 0;
+      let detectedItem = segment;
+      let customNote = '';
+
+      // 抓取最後面的金額數字 (例如 50 或 $50)
+      const priceRegex = /\s+(\d+)(?:\s|$)/g;
+      let match;
+      let lastPriceMatch = null;
+      while ((match = priceRegex.exec(segment)) !== null) {
+        lastPriceMatch = match;
       }
+
+      if (lastPriceMatch) {
+        matchedPrice = parseInt(lastPriceMatch[1], 10);
+        detectedItem = segment.slice(0, lastPriceMatch.index).trim();
+        customNote = segment.slice(lastPriceMatch.index + lastPriceMatch[0].length).trim();
+      } else if (state.menu.length > 0) {
+        // 如果使用者沒打價錢，嘗試從 AI 菜單中對應
+        const sortedMenu = [...state.menu].sort((a, b) => b.name.length - a.name.length);
+        const found = sortedMenu.find(m => segment.includes(m.name));
+        if (found) {
+          matchedPrice = found.price;
+          detectedItem = found.name;
+          customNote = segment.replace(found.name, '').trim();
+        }
+      }
+
+      if (!detectedItem) detectedItem = segment;
+
+      state.orders.push({
+        userId: event.source.userId,
+        userName,
+        item: detectedItem,
+        price: matchedPrice,
+        note: customNote
+      });
+
+      const priceText = matchedPrice > 0 ? `💰 $${matchedPrice}` : '';
+      const noteText = customNote ? ` 📝 (${customNote})` : '';
+      addedResults.push(`• ${detectedItem} ${priceText}${noteText}`);
     }
 
-    // 清理殘餘符號
-    if (!detectedItem) detectedItem = orderContent;
-
-    state.orders.push({
-      userId: event.source.userId,
-      userName,
-      item: detectedItem,
-      price: matchedPrice,
-      note: customNote
-    });
-
-    const priceText = matchedPrice > 0 ? `💰 $${matchedPrice}` : '💰 $0';
-    const noteText = customNote ? ` 📝 (${customNote})` : '';
     return client.replyMessage(event.replyToken, {
       type: 'text',
-      text: `✅ 已登記：${userName}\n🍴 ${detectedItem} ${priceText}${noteText}`
+      text: `✅ 已幫 **${userName}** 登記：\n${addedResults.join('\n')}`
     });
   }
 
   if (rawText === '取消') {
     if (!state.isOrdering || state.orders.length === 0) return;
     const userId = event.source.userId;
+    // 取消該使用者最後加入的一筆品項
     const idx = state.orders.map(o => o.userId).lastIndexOf(userId);
     if (idx === -1) {
       return client.replyMessage(event.replyToken, { type: 'text', text: '⚠️ 你目前沒有點餐紀錄可以取消喔！' });
@@ -250,7 +258,7 @@ async function handleEvent(event) {
     });
   }
 
-  // 📊 優化排版：統計 / 目前訂單
+  // 📊 統計 / 目前訂單
   if (rawText === '統計' || rawText === '目前訂單') {
     if (!state.isOrdering) {
       return client.replyMessage(event.replyToken, { type: 'text', text: '⚠️ 目前沒有進行中的訂單。' });
@@ -262,7 +270,7 @@ async function handleEvent(event) {
     const summary = {};
     let totalAmount = 0;
     state.orders.forEach(o => {
-      const key = `${o.item}${o.price >5 || o.price > 0 ? ` ($${o.price})` : ''}`;
+      const key = `${o.item}${o.price > 0 ? ` ($${o.price})` : ''}`;
       summary[key] = (summary[key] || 0) + 1;
       totalAmount += o.price;
     });
@@ -280,7 +288,7 @@ async function handleEvent(event) {
     });
   }
 
-  // 🏁 優化排版：結單
+  // 🏁 結單
   if (rawText === '結單') {
     if (!state.isOrdering) {
       return client.replyMessage(event.replyToken, { type: 'text', text: '⚠️ 目前沒有進行中的訂單可以結單。' });
