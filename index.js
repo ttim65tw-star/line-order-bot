@@ -308,27 +308,38 @@ async function handleEvent(event) {
   const userId = event.source.userId;
   const userName = await getUserName(event);
 
-  // 🤖 步驟 1：優先檢查是否為喚醒詞「點餐神助手」
+  // 🤖 步驟 1：檢查是否為喚醒詞「點餐神助手」
   if (event.message.type === 'text') {
     const rawText = event.message.text.trim();
     const lowerText = rawText.toLowerCase();
 
     if (lowerText === '點餐神助手') {
+      if (state.closeTimer) {
+        clearTimeout(state.closeTimer);
+        state.closeTimer = null;
+        state.closeTimeText = null;
+      }
+      state.isOrdering = true;
+      state.menu = [];
+      state.orders = [];
+      state.creatorId = userId;
+      state.creatorName = userName;
+
       return client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '🤖 **點餐神助手已上線！**\n\n📌 **使用方式：**\n1. 傳送「菜單照片」或輸入「開單」來發起點餐。\n2. 點餐/加減數量：\n   • `+1 滷肉飯` 或 `+2 珍奶`\n   • `-1 滷肉飯`（扣除或刪除該品項）\n   • `全部取消`（清除你先前點過的所有品項）\n3. **僅限發起人**可輸入「統計」、「結單」或設定自動結單時間（例如：「11:30結單」）。'
+        text: `🤖 **點餐神助手已由 ${userName} 喚醒並開單！**\n\n📌 **使用方式：**\n1. 直接「傳送菜單照片」AI 會立刻自動辨識！\n2. 點餐/加減數量：\n   • \`+1 滷肉飯\` 或 \`+2 珍奶\`\n   • \`-1 滷肉飯\`（扣除或刪除該品項）\n   • \`全部取消\`（清除你先前點過的所有品項）\n3. **僅限發起人（${userName}）**可輸入「統計」、「結單」或設定自動結單時間（例如：「11:30結單」）。`
       });
     }
   }
 
-  // 🛑 步驟 2：如果目前「尚未開單」，直接忽略所有訊息（包括圖片與文字），完全不干擾群組聊天
+  // 🛑 步驟 2：若尚未喚醒/開單，直接忽略所有訊息
   if (!state.isOrdering) {
     return;
   }
 
-  // ─── 以下為「已開單」狀態下的處理邏輯 ───
+  // ─── 以下為「已喚醒/開單」狀態下的處理邏輯 ───
 
-  // 🖼️ 處理圖片訊息（發起開單辨識）
+  // 🖼️ 處理圖片訊息（直接自動進行 AI 辨識）
   if (event.message.type === 'image') {
     if (state.closeTimer) {
       clearTimeout(state.closeTimer);
@@ -337,7 +348,6 @@ async function handleEvent(event) {
     }
 
     try {
-      // 💬 立即告知使用者正在判讀請稍候
       await client.replyMessage(event.replyToken, {
         type: 'text',
         text: '🔍 AI 正在判讀菜單，請稍候...'
@@ -352,7 +362,6 @@ async function handleEvent(event) {
         return client.pushMessage(groupId, { type: 'text', text: '⚠️ AI 找不到清晰的品項與價格！' });
       }
 
-      state.isOrdering = true;
       state.menu = parsed.items;
       state.orders = [];
       state.creatorId = userId;
@@ -364,7 +373,6 @@ async function handleEvent(event) {
         text: `👑 發起人：${userName}\n📋 菜單辨識成功！\n\n${menuListText}\n\n👉 點餐範例：「+1 品項」或具備數量/刪除與全部取消功能\n⏰ 僅限發起人可設定結單與統計！`
       });
     } catch (err) {
-      state.isOrdering = true;
       state.menu = [];
       state.orders = [];
       state.creatorId = userId;
@@ -379,24 +387,6 @@ async function handleEvent(event) {
 
   if (event.message.type !== 'text') return;
   const rawText = event.message.text.trim();
-
-  if (rawText === '開單') {
-    if (state.closeTimer) {
-      clearTimeout(state.closeTimer);
-      state.closeTimer = null;
-      state.closeTimeText = null;
-    }
-    state.isOrdering = true;
-    state.menu = [];
-    state.orders = [];
-    state.creatorId = userId;
-    state.creatorName = userName;
-
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: `📢 **已由 ${userName} 開啟自由點餐！**\n請輸入：「+1 品項 價格 備註」\n⏰ 僅限發起人可進行結單與統計！`
-    });
-  }
 
   const timeCmd = parseCloseTimeCommand(rawText);
   if (timeCmd) {
@@ -533,7 +523,7 @@ async function handleEvent(event) {
 
     return client.replyMessage(event.replyToken, {
       type: 'text',
-      text: `${receiptText}\n\n感謝大家使用！下次點餐請再傳菜單或輸入「開單」～`
+      text: `${receiptText}\n\n感謝大家使用！下次點餐請再輸入「點餐神助手」喚醒機器人～`
     });
   }
 }
