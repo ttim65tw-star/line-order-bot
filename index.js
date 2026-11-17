@@ -34,7 +34,6 @@ function getImageBuffer(messageId) {
   });
 }
 
-// 🚀 圖片壓縮維持 800px，確保上傳頻寬最小化
 async function compressImageFast(buffer) {
   try {
     const image = await Jimp.read(buffer);
@@ -64,8 +63,7 @@ async function getUserName(event) {
   }
 }
 
-// ⚡ 付費版專屬極速呼叫（拿掉不必要的重試等待，追求瞬間回應）
-async function callGeminiPaidFast(base64Image) {
+async function callGeminiFast(base64Image) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('尚未設定 GEMINI_API_KEY！');
 
@@ -320,13 +318,13 @@ async function handleEvent(event) {
     try {
       await client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '⚡ 付費版極速解析中，請稍候...'
+        text: '🔍 收到菜單！AI 正在進行解析，請稍候...'
       });
 
       const rawBuffer = await getImageBuffer(event.message.id);
       const compressedBuffer = await compressImageFast(rawBuffer);
       const base64Image = compressedBuffer.toString('base64');
-      const parsed = await callGeminiPaidFast(base64Image);
+      const parsed = await callGeminiFast(base64Image);
 
       if (!parsed.isMenu || !parsed.items || parsed.items.length === 0) {
         return client.pushMessage(groupId, { type: 'text', text: '⚠️ AI 找不到清晰的品項與價格！' });
