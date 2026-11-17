@@ -526,3 +526,20 @@ async function handleEvent(event) {
       state.creatorName = null;
       return client.replyMessage(event.replyToken, { type: 'text', text: '🏁 訂單已結束（無人點餐）。' });
     }
+
+    const receiptText = generateReportText(state, '🏁 ─── 【最終結單明細】 ───');
+    state.isOrdering = false;
+    state.menu = [];
+    state.orders = [];
+    state.creatorId = null;
+    state.creatorName = null;
+
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: `${receiptText}\n\n感謝大家使用！下次點餐請再傳菜單或輸入「開單」～`
+    });
+  }
+}
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`Server is running on port ${port}`));
