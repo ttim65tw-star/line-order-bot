@@ -10,7 +10,6 @@ const config = {
 const client = new line.Client(config);
 const app = express();
 
-// 💡 確保每個群組的狀態完全獨立隔離（支援數百個群組同時運作）
 const groupStates = {};
 
 app.post('/webhook', line.middleware(config), (req, res) => {
@@ -35,15 +34,16 @@ function getImageBuffer(messageId) {
   });
 }
 
-async function compressImage(buffer) {
+// 🚀 極速優化：將圖片縮小至 800px 並壓縮，大幅降低 AI 讀圖負擔與延遲
+async function compressImageFast(buffer) {
   try {
     const image = await Jimp.read(buffer);
-    if (image.bitmap.width > 1024) {
-      image.resize(1024, Jimp.AUTO);
+    if (image.bitmap.width > 800) {
+      image.resize(800, Jimp.AUTO);
     }
-    return await image.quality(80).getBufferAsync(Jimp.MIME_JPEG);
+    return await image.quality(75).getBufferAsync(Jimp.MIME_JPEG);
   } catch (err) {
-    console.warn('⚠️ 圖片壓縮失敗:', err.message);
+    console.warn('⚠️ 圖片壓縮失敗，使用原圖:', err.message);
     return buffer;
   }
 }
@@ -64,55 +64,58 @@ async function getUserName(event) {
   }
 }
 
-// 🚀 多模型輪替備援（專為多群組高併發設計，自動避開單一模型塞車）
-async function callGeminiHighConcurrency(base64Image) {
+// 🚀 多模型自動輪替與智慧重試機制（徹底解決過載與逾時）
+async function callGeminiUltraFast(base64Image) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('尚未設定 GEMINI_API_KEY！');
 
-  // 多個模型端點輪流嘗試，分散流量
   const models = ['gemini-3.8-flash', 'gemini-flash-latest'];
-  const prompt = `提取菜單餐點與價格。規格拆開如「品項(大)」。價格為純數字，無價格填0。嚴格只回傳純JSON：{"isMenu":true,"items":[{"name":"品項","price":數字}]}`;
+  const prompt = `提取菜單品項與價格。大小份拆開如「品項(大)」。價格為純數字，無價格填0。嚴格只回傳純JSON：{"isMenu":true,"items":[{"name":"品項","price":數字}]}`;
 
   let lastError = null;
 
   for (const model of models) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 18000); // 18秒逾時快速切換
+    for (let attempt = 1; attempt <= 2; attempt++) { // 每個模型嘗試 2 次
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000); // 縮短至 12 秒快速切換
 
-    try {
-      console.log(`⏳ 多群組調用：嘗試模型 [${model}]...`);
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{
-            parts: [
-              { text: prompt },
-              { inline_data: { mime_type: "image/jpeg", data: base64Image } }
-            ]
-          }],
-          generationConfig: { responseMimeType: "application/json", temperature: 0.2 }
-        }),
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
+      try {
+        console.log(`⚡ [模型: ${model}] 嘗試解析 (第 ${attempt} 次)...`);
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { text: prompt },
+                { inline_data: { mime_type: "image/jpeg", data: base64Image } }
+              ]
+            }],
+            generationConfig: { responseMimeType: "application/json", temperature: 0.1 }
+          }),
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
 
-      const data = await response.json();
-      if (data.error) throw new Error(`${model} 錯誤: ${data.error.message}`);
-      if (!data.candidates || data.candidates.length === 0) throw new Error(`${model} 未回傳內容`);
+        const data = await response.json();
+        if (data.error) throw new Error(`${model} 錯誤: ${data.error.message}`);
+        if (!data.candidates || data.candidates.length === 0) throw new Error(`${model} 未回傳內容`);
 
-      const text = data.candidates[0].content.parts[0].text;
-      const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
-      return JSON.parse(cleanText);
-    } catch (err) {
-      clearTimeout(timeoutId);
-      console.warn(`⚠️ 模型 [${model}] 遇瓶頸 (${err.message})，嘗試下一個備援模型...`);
-      lastError = err;
+        const text = data.candidates[0].content.parts[0].text;
+        const cleanText = text.replace(/```json/g, '').replace(/```/g, '').trim();
+        console.log(`✅ [模型: ${model}] 解析成功！`);
+        return JSON.parse(cleanText);
+      } catch (err) {
+        clearTimeout(timeoutId);
+        console.warn(`⚠️ [模型: ${model}] 失敗 (${err.message})`);
+        lastError = err;
+        await new Promise(resolve => setTimeout(resolve, 800)); // 短暫間隔後重試
+      }
     }
   }
 
-  throw lastError || new Error('所有 AI 模型皆繁忙');
+  throw lastError || new Error('所有 AI 模型皆過載');
 }
 
 function generateReportText(state, titlePrefix) {
@@ -330,13 +333,13 @@ async function handleEvent(event) {
     try {
       await client.replyMessage(event.replyToken, {
         type: 'text',
-        text: '🔍 收到菜單！AI 正在進行多群組高速解析，請稍候...'
+        text: '🔍 收到菜單！AI 正在進行極速壓縮與多模型解析，請稍候...'
       });
 
       const rawBuffer = await getImageBuffer(event.message.id);
-      const compressedBuffer = await compressImage(rawBuffer);
+      const compressedBuffer = await compressImageFast(rawBuffer);
       const base64Image = compressedBuffer.toString('base64');
-      const parsed = await callGeminiHighConcurrency(base64Image);
+      const parsed = await callGeminiUltraFast(base64Image);
 
       if (!parsed.isMenu || !parsed.items || parsed.items.length === 0) {
         return client.pushMessage(groupId, { type: 'text', text: '⚠️ AI 找不到清晰的品項與價格！' });
@@ -362,7 +365,7 @@ async function handleEvent(event) {
 
       return client.pushMessage(groupId, {
         type: 'text',
-        text: `👑 發起人：${userName}\n⚠️ 目前 AI 伺服器尖峰過載，已自動開啟「手動點餐」模式！\n請直接輸入：「+1 品項 價格」`
+        text: `👑 發起人：${userName}\n⚠️ 目前 AI 伺服器尖峰過載，已自動切換為「手動點餐」模式！\n請直接輸入：「+1 品項 價格」`
       });
     }
   }
@@ -371,7 +374,6 @@ async function handleEvent(event) {
   const rawText = event.message.text.trim();
   const lowerText = rawText.toLowerCase();
 
-  // 🤖 喚醒機器人指令
   if (lowerText === '點餐神助手') {
     return client.replyMessage(event.replyToken, {
       type: 'text',
@@ -435,9 +437,9 @@ async function handleEvent(event) {
     });
   }
 
-  if (/^[+\-＋\－\–]?\d*\s*[\+＋\-\－\–]/.test(rawText) || rawText.startsWith('+') || rawText.startsWith('＋') || rawText.startsWith('-') || rawText.startsWith('－') || rawText.startsWith('–') || rawText.includes('+') || rawText.includes('＋')) {
+  if (/^[+\-＋\–\–]?\d*\s*[\+＋\-\－\–]/.test(rawText) || rawText.startsWith('+') || rawText.startsWith('＋') || rawText.startsWith('-') || rawText.startsWith('－') || rawText.startsWith('–') || rawText.includes('+') || rawText.includes('＋')) {
     const subSegments = rawText
-      .split(/(?=[+\-＋\－\–]\d+)/g)
+      .split(/(?=[+\-＋\–\–]\d+)/g)
       .map(s => s.trim())
       .filter(Boolean);
 
